@@ -1,0 +1,4475 @@
+import React, { useEffect, useMemo, useState } from "react";
+
+const STORAGE = {
+  patients: "dental_pro_patients",
+  appointments: "dental_pro_appointments",
+  payments: "dental_pro_payments",
+  settings: "dental_pro_settings",
+};
+
+const today = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const uid = () =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+const money = (value) =>
+  new Intl.NumberFormat("ar-IQ").format(Number(value || 0)) + " د.ع";
+
+const dateText = (value) => {
+  if (!value) return "-";
+
+  const d = new Date(`${value}T00:00:00`);
+
+  return d.toLocaleDateString("ar-IQ", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+};
+
+const shortDate = (value) => {
+  if (!value) return "-";
+
+  const d = new Date(`${value}T00:00:00`);
+
+  return d.toLocaleDateString("ar-IQ", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+};
+
+const read = (key, fallback) => {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const write = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore storage errors
+  }
+};
+
+const emptyPatientForm = () => ({
+  name: "",
+  phone: "",
+  age: "",
+  gender: "ذكر",
+  address: "",
+  notes: "",
+
+  addAppointment: true,
+  appointmentDate: today(),
+  appointmentTime: "09:00",
+  appointmentTreatment: "",
+  appointmentStatus: "مؤكد",
+  appointmentNotes: "",
+});
+
+const emptyAppointmentForm = () => ({
+  patientId: "",
+  date: today(),
+  time: "09:00",
+  treatment: "",
+  status: "مؤكد",
+  notes: "",
+});
+
+const emptyPaymentForm = () => ({
+  patientId: "",
+  amount: "",
+  date: today(),
+  method: "نقدي",
+  notes: "",
+});
+
+function App() {
+  const [page, setPage] = useState("home");
+
+  const [patients, setPatients] = useState(() =>
+    read(STORAGE.patients, [])
+  );
+
+  const [appointments, setAppointments] = useState(() =>
+    read(STORAGE.appointments, [])
+  );
+
+  const [payments, setPayments] = useState(() =>
+    read(STORAGE.payments, [])
+  );
+
+  const [settings, setSettings] = useState(() =>
+    read(STORAGE.settings, {
+      clinicName: "عيادة الأسنان",
+      doctorName: "د. طبيب الأسنان",
+      phone: "",
+      address: "",
+    })
+  );
+
+  const [modal, setModal] = useState(null);
+
+  const [patientForm, setPatientForm] = useState(emptyPatientForm());
+  const [editingPatientId, setEditingPatientId] = useState(null);
+
+  const [appointmentForm, setAppointmentForm] = useState(
+    emptyAppointmentForm()
+  );
+  const [editingAppointmentId, setEditingAppointmentId] = useState(null);
+
+  const [paymentForm, setPaymentForm] = useState(emptyPaymentForm());
+
+  const [selectedPatientId, setSelectedPatientId] = useState(null);
+
+  const [patientSearch, setPatientSearch] = useState("");
+  const [appointmentSearch, setAppointmentSearch] = useState("");
+  const [appointmentDateFilter, setAppointmentDateFilter] =
+    useState("all");
+
+  const [toast, setToast] = useState("");
+
+  useEffect(() => {
+    write(STORAGE.patients, patients);
+  }, [patients]);
+
+  useEffect(() => {
+    write(STORAGE.appointments, appointments);
+  }, [appointments]);
+
+  useEffect(() => {
+    write(STORAGE.payments, payments);
+  }, [payments]);
+
+  useEffect(() => {
+    write(STORAGE.settings, settings);
+  }, [settings]);
+
+  useEffect(() => {
+    if (!toast) return;
+
+    const timer = setTimeout(() => {
+      setToast("");
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const notify = (message) => {
+    setToast(message);
+  };
+
+  const patientName = (id) => {
+    const patient = patients.find((p) => p.id === id);
+    return patient?.name || "مريض غير معروف";
+  };
+
+  const todayAppointments = useMemo(() => {
+    return appointments
+      .filter((a) => a.date === today())
+      .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  }, [appointments]);
+
+  const upcomingAppointments = useMemo(() => {
+    return appointments
+      .filter((a) => a.date > today())
+      .sort((a, b) => {
+        const first = `${a.date} ${a.time || ""}`;
+        const second = `${b.date} ${b.time || ""}`;
+        return first.localeCompare(second);
+      });
+  }, [appointments]);
+
+  const previousAppointments = useMemo(() => {
+    return appointments
+      .filter((a) => a.date < today())
+      .sort((a, b) => {
+        const first = `${a.date} ${a.time || ""}`;
+        const second = `${b.date} ${b.time || ""}`;
+        return second.localeCompare(first);
+      });
+  }, [appointments]);
+
+  const totalRevenue = useMemo(() => {
+    return payments.reduce(
+      (sum, payment) => sum + Number(payment.amount || 0),
+      0
+    );
+  }, [payments]);
+
+  const todayRevenue = useMemo(() => {
+    return payments
+      .filter((payment) => payment.date === today())
+      .reduce(
+        (sum, payment) => sum + Number(payment.amount || 0),
+        0
+      );
+  }, [payments]);
+
+  const filteredPatients = useMemo(() => {
+    const q = patientSearch.trim().toLowerCase();
+
+    if (!q) return patients;
+
+    return patients.filter((patient) => {
+      return (
+        patient.name?.toLowerCase().includes(q) ||
+        patient.phone?.toLowerCase().includes(q) ||
+        patient.address?.toLowerCase().includes(q)
+      );
+    });
+  }, [patients, patientSearch]);
+
+  const patientPayments = selectedPatientId
+    ? payments.filter((p) => p.patientId === selectedPatientId)
+    : [];
+
+  const patientAppointments = selectedPatientId
+    ? appointments
+        .filter((a) => a.patientId === selectedPatientId)
+        .sort((a, b) => {
+          const first = `${a.date} ${a.time || ""}`;
+          const second = `${b.date} ${b.time || ""}`;
+          return second.localeCompare(first);
+        })
+    : [];
+
+  const selectedPatient = selectedPatientId
+    ? patients.find((p) => p.id === selectedPatientId)
+    : null;
+
+  const openNewPatient = () => {
+    setEditingPatientId(null);
+    setPatientForm(emptyPatientForm());
+    setModal("patient");
+  };
+
+  const openEditPatient = (patient) => {
+    setEditingPatientId(patient.id);
+
+    setPatientForm({
+      name: patient.name || "",
+      phone: patient.phone || "",
+      age: patient.age || "",
+      gender: patient.gender || "ذكر",
+      address: patient.address || "",
+      notes: patient.notes || "",
+
+      addAppointment: false,
+      appointmentDate: today(),
+      appointmentTime: "09:00",
+      appointmentTreatment: "",
+      appointmentStatus: "مؤكد",
+      appointmentNotes: "",
+    });
+
+    setModal("patient");
+  };
+
+  const savePatient = () => {
+    const name = patientForm.name.trim();
+
+    if (!name) {
+      notify("يرجى كتابة اسم المريض");
+      return;
+    }
+
+    if (editingPatientId) {
+      setPatients((current) =>
+        current.map((patient) =>
+          patient.id === editingPatientId
+            ? {
+                ...patient,
+                name,
+                phone: patientForm.phone.trim(),
+                age: patientForm.age,
+                gender: patientForm.gender,
+                address: patientForm.address.trim(),
+                notes: patientForm.notes.trim(),
+                updatedAt: new Date().toISOString(),
+              }
+            : patient
+        )
+      );
+
+      if (patientForm.addAppointment) {
+        if (!patientForm.appointmentDate) {
+          notify("اختر تاريخ الموعد");
+          return;
+        }
+
+        setAppointments((current) => [
+          ...current,
+          {
+            id: uid(),
+            patientId: editingPatientId,
+            date: patientForm.appointmentDate,
+            time: patientForm.appointmentTime,
+            treatment: patientForm.appointmentTreatment.trim(),
+            status: patientForm.appointmentStatus,
+            notes: patientForm.appointmentNotes.trim(),
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+
+      notify("تم تحديث بيانات المريض");
+    } else {
+      const patientId = uid();
+
+      setPatients((current) => [
+        ...current,
+        {
+          id: patientId,
+          name,
+          phone: patientForm.phone.trim(),
+          age: patientForm.age,
+          gender: patientForm.gender,
+          address: patientForm.address.trim(),
+          notes: patientForm.notes.trim(),
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
+      if (patientForm.addAppointment) {
+        if (!patientForm.appointmentDate) {
+          notify("اختر تاريخ الموعد");
+          return;
+        }
+
+        setAppointments((current) => [
+          ...current,
+          {
+            id: uid(),
+            patientId,
+            date: patientForm.appointmentDate,
+            time: patientForm.appointmentTime,
+            treatment: patientForm.appointmentTreatment.trim(),
+            status: patientForm.appointmentStatus,
+            notes: patientForm.appointmentNotes.trim(),
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+
+      notify(
+        patientForm.addAppointment
+          ? "تم إضافة المريض وحجز الموعد بنجاح"
+          : "تم إضافة المريض بنجاح"
+      );
+    }
+
+    setModal(null);
+  };
+
+  const deletePatient = (id) => {
+    const patient = patients.find((p) => p.id === id);
+
+    if (!patient) return;
+
+    const ok = window.confirm(
+      `هل أنت متأكد من حذف المريض "${patient.name}"؟\nسيتم حذف مواعيده ودفعاته أيضًا.`
+    );
+
+    if (!ok) return;
+
+    setPatients((current) =>
+      current.filter((p) => p.id !== id)
+    );
+
+    setAppointments((current) =>
+      current.filter((a) => a.patientId !== id)
+    );
+
+    setPayments((current) =>
+      current.filter((p) => p.patientId !== id)
+    );
+
+    if (selectedPatientId === id) {
+      setSelectedPatientId(null);
+    }
+
+    notify("تم حذف المريض");
+  };
+
+  const showPatient = (patient) => {
+    setSelectedPatientId(patient.id);
+    setPage("patient");
+  };
+
+  const openNewAppointment = (patientId = "") => {
+    setEditingAppointmentId(null);
+
+    setAppointmentForm({
+      ...emptyAppointmentForm(),
+      patientId,
+    });
+
+    setModal("appointment");
+  };
+
+  const openEditAppointment = (appointment) => {
+    setEditingAppointmentId(appointment.id);
+
+    setAppointmentForm({
+      patientId: appointment.patientId || "",
+      date: appointment.date || today(),
+      time: appointment.time || "09:00",
+      treatment: appointment.treatment || "",
+      status: appointment.status || "مؤكد",
+      notes: appointment.notes || "",
+    });
+
+    setModal("appointment");
+  };
+
+  const saveAppointment = () => {
+    if (!appointmentForm.patientId) {
+      notify("اختر المريض");
+      return;
+    }
+
+    if (!appointmentForm.date) {
+      notify("اختر تاريخ الموعد");
+      return;
+    }
+
+    if (editingAppointmentId) {
+      setAppointments((current) =>
+        current.map((appointment) =>
+          appointment.id === editingAppointmentId
+            ? {
+                ...appointment,
+                ...appointmentForm,
+                treatment: appointmentForm.treatment.trim(),
+                notes: appointmentForm.notes.trim(),
+                updatedAt: new Date().toISOString(),
+              }
+            : appointment
+        )
+      );
+
+      notify("تم تحديث الموعد");
+    } else {
+      setAppointments((current) => [
+        ...current,
+        {
+          id: uid(),
+          ...appointmentForm,
+          treatment: appointmentForm.treatment.trim(),
+          notes: appointmentForm.notes.trim(),
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
+      notify("تم حجز الموعد بنجاح");
+    }
+
+    setModal(null);
+  };
+
+  const deleteAppointment = (id) => {
+    const ok = window.confirm("هل تريد حذف هذا الموعد؟");
+
+    if (!ok) return;
+
+    setAppointments((current) =>
+      current.filter((appointment) => appointment.id !== id)
+    );
+
+    notify("تم حذف الموعد");
+  };
+
+  const openPayment = (patientId = "") => {
+    setPaymentForm({
+      ...emptyPaymentForm(),
+      patientId,
+    });
+
+    setModal("payment");
+  };
+
+  const savePayment = () => {
+    const amount = Number(paymentForm.amount);
+
+    if (!paymentForm.patientId) {
+      notify("اختر المريض");
+      return;
+    }
+
+    if (!amount || amount <= 0) {
+      notify("أدخل مبلغًا صحيحًا");
+      return;
+    }
+
+    setPayments((current) => [
+      ...current,
+      {
+        id: uid(),
+        patientId: paymentForm.patientId,
+        amount,
+        date: paymentForm.date,
+        method: paymentForm.method,
+        notes: paymentForm.notes.trim(),
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    setModal(null);
+    notify("تم تسجيل الدفعة بنجاح");
+  };
+
+  const deletePayment = (id) => {
+    const ok = window.confirm("هل تريد حذف هذه الدفعة؟");
+
+    if (!ok) return;
+
+    setPayments((current) =>
+      current.filter((payment) => payment.id !== id)
+    );
+
+    notify("تم حذف الدفعة");
+  };
+
+  const saveSettings = () => {
+    setSettings((current) => ({
+      ...current,
+      clinicName:
+        settings.clinicName.trim() || "عيادة الأسنان",
+      doctorName:
+        settings.doctorName.trim() || "د. طبيب الأسنان",
+      phone: settings.phone.trim(),
+      address: settings.address.trim(),
+    }));
+
+    setModal(null);
+    notify("تم حفظ الإعدادات");
+  };
+
+  const openSettings = () => {
+    setModal("settings");
+  };
+
+  const navigate = (nextPage) => {
+    setPage(nextPage);
+  };
+
+  const pageTitle = {
+    home: "الرئيسية",
+    patients: "المرضى",
+    appointments: "المواعيد",
+    accounts: "الحسابات",
+    reports: "التقارير",
+    patient: "ملف المريض",
+  };
+
+  return (
+    <div className="app" dir="rtl">
+      <style>{CSS}</style>
+
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-logo">🦷</div>
+
+          <div>
+            <div className="brand-title">
+              {settings.clinicName || "عيادة الأسنان"}
+            </div>
+
+            <div className="brand-subtitle">
+              نظام إدارة العيادة
+            </div>
+          </div>
+        </div>
+
+        <div className="sidebar-section-title">القائمة الرئيسية</div>
+
+        <nav className="nav">
+          <NavItem
+            active={page === "home"}
+            onClick={() => navigate("home")}
+            icon="⌂"
+            text="الرئيسية"
+          />
+
+          <NavItem
+            active={page === "patients"}
+            onClick={() => navigate("patients")}
+            icon="👥"
+            text="المرضى"
+          />
+
+          <NavItem
+            active={
+              page === "appointments" ||
+              page === "patient"
+            }
+            onClick={() => navigate("appointments")}
+            icon="📅"
+            text="المواعيد"
+          />
+
+          <NavItem
+            active={page === "accounts"}
+            onClick={() => navigate("accounts")}
+            icon="💰"
+            text="الحسابات"
+          />
+
+          <NavItem
+            active={page === "reports"}
+            onClick={() => navigate("reports")}
+            icon="📊"
+            text="التقارير"
+          />
+        </nav>
+
+        <div className="sidebar-bottom">
+          <button
+            className="settings-button"
+            onClick={openSettings}
+          >
+            <span>⚙️</span>
+            <span>إعدادات العيادة</span>
+          </button>
+
+          <div className="doctor-box">
+            <div className="doctor-avatar">د</div>
+
+            <div>
+              <strong>{settings.doctorName}</strong>
+              <span>مدير العيادة</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main className="main">
+        <header className="topbar">
+          <div>
+            <div className="breadcrumb">
+              عيادة الأسنان / {pageTitle[page] || "الرئيسية"}
+            </div>
+
+            <h1>
+              {page === "patient" && selectedPatient
+                ? selectedPatient.name
+                : pageTitle[page] || "الرئيسية"}
+            </h1>
+          </div>
+
+          <div className="top-actions">
+            <button
+              className="btn btn-primary"
+              onClick={openNewPatient}
+            >
+              <span>＋</span>
+              إضافة مريض وحجز موعد
+            </button>
+          </div>
+        </header>
+
+        <div className="page-content">
+          {page === "home" && (
+            <Dashboard
+              settings={settings}
+              patients={patients}
+              todayAppointments={todayAppointments}
+              upcomingAppointments={upcomingAppointments}
+              previousAppointments={previousAppointments}
+              totalRevenue={totalRevenue}
+              todayRevenue={todayRevenue}
+              patientName={patientName}
+              onPatient={showPatient}
+              onAppointment={openEditAppointment}
+              onNewAppointment={() => openNewAppointment()}
+              onNewPatient={openNewPatient}
+              onPayment={() => openPayment()}
+            />
+          )}
+
+          {page === "patients" && (
+            <PatientsPage
+              patients={filteredPatients}
+              search={patientSearch}
+              setSearch={setPatientSearch}
+              appointments={appointments}
+              onNew={openNewPatient}
+              onEdit={openEditPatient}
+              onDelete={deletePatient}
+              onOpen={showPatient}
+            />
+          )}
+
+          {page === "appointments" && (
+            <AppointmentsPage
+              appointments={appointments}
+              patients={patients}
+              search={appointmentSearch}
+              setSearch={setAppointmentSearch}
+              dateFilter={appointmentDateFilter}
+              setDateFilter={setAppointmentDateFilter}
+              onNew={openNewAppointment}
+              onEdit={openEditAppointment}
+              onDelete={deleteAppointment}
+              onPatient={showPatient}
+            />
+          )}
+
+          {page === "accounts" && (
+            <AccountsPage
+              payments={payments}
+              patients={patients}
+              totalRevenue={totalRevenue}
+              todayRevenue={todayRevenue}
+              onNew={openPayment}
+              onDelete={deletePayment}
+              patientName={patientName}
+            />
+          )}
+
+          {page === "reports" && (
+            <ReportsPage
+              patients={patients}
+              appointments={appointments}
+              payments={payments}
+              totalRevenue={totalRevenue}
+              todayRevenue={todayRevenue}
+              patientName={patientName}
+            />
+          )}
+
+          {page === "patient" && selectedPatient && (
+            <PatientProfile
+              patient={selectedPatient}
+              appointments={patientAppointments}
+              payments={patientPayments}
+              onBack={() => setPage("patients")}
+              onEdit={() => openEditPatient(selectedPatient)}
+              onAppointment={() =>
+                openNewAppointment(selectedPatient.id)
+              }
+              onPayment={() =>
+                openPayment(selectedPatient.id)
+              }
+              onEditAppointment={openEditAppointment}
+              onDeleteAppointment={deleteAppointment}
+              onDeletePatient={() =>
+                deletePatient(selectedPatient.id)
+              }
+            />
+          )}
+
+          {page === "patient" && !selectedPatient && (
+            <Empty
+              title="لم يتم اختيار مريض"
+              text="اختر مريضًا من صفحة المرضى لفتح ملفه."
+              actionText="الذهاب إلى المرضى"
+              onAction={() => setPage("patients")}
+            />
+          )}
+        </div>
+      </main>
+
+      {modal === "patient" && (
+        <Modal
+          title={
+            editingPatientId
+              ? "تعديل بيانات المريض"
+              : "إضافة مريض جديد"
+          }
+          subtitle={
+            editingPatientId
+              ? "يمكنك تعديل بيانات المريض أو حجز موعد جديد له."
+              : "أدخل بيانات المريض، ويمكنك حجز موعده مباشرة."
+          }
+          onClose={() => setModal(null)}
+          size="large"
+        >
+          <div className="form-grid">
+            <Field
+              label="اسم المريض *"
+              value={patientForm.name}
+              onChange={(value) =>
+                setPatientForm((f) => ({
+                  ...f,
+                  name: value,
+                }))
+              }
+              placeholder="مثال: أحمد محمد"
+            />
+
+            <Field
+              label="رقم الهاتف"
+              value={patientForm.phone}
+              onChange={(value) =>
+                setPatientForm((f) => ({
+                  ...f,
+                  phone: value,
+                }))
+              }
+              placeholder="07xxxxxxxxx"
+            />
+
+            <Field
+              label="العمر"
+              type="number"
+              value={patientForm.age}
+              onChange={(value) =>
+                setPatientForm((f) => ({
+                  ...f,
+                  age: value,
+                }))
+              }
+              placeholder="العمر"
+            />
+
+            <SelectField
+              label="الجنس"
+              value={patientForm.gender}
+              onChange={(value) =>
+                setPatientForm((f) => ({
+                  ...f,
+                  gender: value,
+                }))
+              }
+              options={[
+                ["ذكر", "ذكر"],
+                ["أنثى", "أنثى"],
+              ]}
+            />
+
+            <Field
+              label="العنوان"
+              value={patientForm.address}
+              onChange={(value) =>
+                setPatientForm((f) => ({
+                  ...f,
+                  address: value,
+                }))
+              }
+              placeholder="عنوان المريض"
+            />
+
+            <Field
+              label="ملاحظات المريض"
+              value={patientForm.notes}
+              onChange={(value) =>
+                setPatientForm((f) => ({
+                  ...f,
+                  notes: value,
+                }))
+              }
+              placeholder="ملاحظات عامة"
+            />
+          </div>
+
+          <div className="appointment-section">
+            <div className="appointment-section-header">
+              <div>
+                <h3>📅 حجز الموعد</h3>
+
+                <p>
+                  {editingPatientId
+                    ? "يمكنك اختيار حجز موعد جديد لهذا المريض."
+                    : "سيتم إنشاء الموعد مع حفظ بيانات المريض مباشرة."}
+                </p>
+              </div>
+
+              <label className="switch-row">
+                <input
+                  type="checkbox"
+                  checked={patientForm.addAppointment}
+                  onChange={(e) =>
+                    setPatientForm((f) => ({
+                      ...f,
+                      addAppointment: e.target.checked,
+                    }))
+                  }
+                />
+
+                <span>
+                  {editingPatientId
+                    ? "حجز موعد جديد"
+                    : "حجز موعد الآن"}
+                </span>
+              </label>
+            </div>
+
+            {patientForm.addAppointment && (
+              <div className="form-grid appointment-fields">
+                <Field
+                  label="تاريخ الموعد *"
+                  type="date"
+                  value={patientForm.appointmentDate}
+                  onChange={(value) =>
+                    setPatientForm((f) => ({
+                      ...f,
+                      appointmentDate: value,
+                    }))
+                  }
+                />
+
+                <Field
+                  label="وقت الموعد *"
+                  type="time"
+                  value={patientForm.appointmentTime}
+                  onChange={(value) =>
+                    setPatientForm((f) => ({
+                      ...f,
+                      appointmentTime: value,
+                    }))
+                  }
+                />
+
+                <Field
+                  label="نوع العلاج"
+                  value={patientForm.appointmentTreatment}
+                  onChange={(value) =>
+                    setPatientForm((f) => ({
+                      ...f,
+                      appointmentTreatment: value,
+                    }))
+                  }
+                  placeholder="مثال: حشوة، تنظيف، علاج عصب"
+                />
+
+                <SelectField
+                  label="حالة الموعد"
+                  value={patientForm.appointmentStatus}
+                  onChange={(value) =>
+                    setPatientForm((f) => ({
+                      ...f,
+                      appointmentStatus: value,
+                    }))
+                  }
+                  options={[
+                    ["مؤكد", "مؤكد"],
+                    ["بانتظار التأكيد", "بانتظار التأكيد"],
+                    ["مكتمل", "مكتمل"],
+                    ["ملغي", "ملغي"],
+                  ]}
+                />
+
+                <div className="field full">
+                  <label>ملاحظات الموعد</label>
+
+                  <textarea
+                    value={patientForm.appointmentNotes}
+                    onChange={(e) =>
+                      setPatientForm((f) => ({
+                        ...f,
+                        appointmentNotes: e.target.value,
+                      }))
+                    }
+                    placeholder="ملاحظات خاصة بهذا الموعد"
+                    rows="3"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="modal-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => setModal(null)}
+            >
+              إلغاء
+            </button>
+
+            <button
+              className="btn btn-primary"
+              onClick={savePatient}
+            >
+              {editingPatientId
+                ? "حفظ التعديلات"
+                : patientForm.addAppointment
+                ? "إضافة المريض وحجز الموعد"
+                : "إضافة المريض"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {modal === "appointment" && (
+        <Modal
+          title={
+            editingAppointmentId
+              ? "تعديل الموعد"
+              : "حجز موعد جديد"
+          }
+          subtitle="أدخل تفاصيل الموعد واحفظها."
+          onClose={() => setModal(null)}
+        >
+          <div className="form-grid">
+            <SelectField
+              label="المريض *"
+              value={appointmentForm.patientId}
+              onChange={(value) =>
+                setAppointmentForm((f) => ({
+                  ...f,
+                  patientId: value,
+                }))
+              }
+              options={[
+                ["", "اختر المريض"],
+                ...patients.map((patient) => [
+                  patient.id,
+                  patient.name,
+                ]),
+              ]}
+            />
+
+            <Field
+              label="تاريخ الموعد *"
+              type="date"
+              value={appointmentForm.date}
+              onChange={(value) =>
+                setAppointmentForm((f) => ({
+                  ...f,
+                  date: value,
+                }))
+              }
+            />
+
+            <Field
+              label="وقت الموعد *"
+              type="time"
+              value={appointmentForm.time}
+              onChange={(value) =>
+                setAppointmentForm((f) => ({
+                  ...f,
+                  time: value,
+                }))
+              }
+            />
+
+            <Field
+              label="نوع العلاج"
+              value={appointmentForm.treatment}
+              onChange={(value) =>
+                setAppointmentForm((f) => ({
+                  ...f,
+                  treatment: value,
+                }))
+              }
+              placeholder="مثال: تنظيف"
+            />
+
+            <SelectField
+              label="حالة الموعد"
+              value={appointmentForm.status}
+              onChange={(value) =>
+                setAppointmentForm((f) => ({
+                  ...f,
+                  status: value,
+                }))
+              }
+              options={[
+                ["مؤكد", "مؤكد"],
+                ["بانتظار التأكيد", "بانتظار التأكيد"],
+                ["مكتمل", "مكتمل"],
+                ["ملغي", "ملغي"],
+              ]}
+            />
+
+            <div className="field full">
+              <label>ملاحظات</label>
+
+              <textarea
+                value={appointmentForm.notes}
+                onChange={(e) =>
+                  setAppointmentForm((f) => ({
+                    ...f,
+                    notes: e.target.value,
+                  }))
+                }
+                rows="3"
+                placeholder="ملاحظات الموعد"
+              />
+            </div>
+          </div>
+
+          <div className="modal-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => setModal(null)}
+            >
+              إلغاء
+            </button>
+
+            <button
+              className="btn btn-primary"
+              onClick={saveAppointment}
+            >
+              {editingAppointmentId
+                ? "حفظ التعديلات"
+                : "حجز الموعد"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {modal === "payment" && (
+        <Modal
+          title="تسجيل دفعة"
+          subtitle="سجل المبلغ المدفوع للمريض."
+          onClose={() => setModal(null)}
+        >
+          <div className="form-grid">
+            <SelectField
+              label="المريض *"
+              value={paymentForm.patientId}
+              onChange={(value) =>
+                setPaymentForm((f) => ({
+                  ...f,
+                  patientId: value,
+                }))
+              }
+              options={[
+                ["", "اختر المريض"],
+                ...patients.map((patient) => [
+                  patient.id,
+                  patient.name,
+                ]),
+              ]}
+            />
+
+            <Field
+              label="المبلغ *"
+              type="number"
+              value={paymentForm.amount}
+              onChange={(value) =>
+                setPaymentForm((f) => ({
+                  ...f,
+                  amount: value,
+                }))
+              }
+              placeholder="مثال: 50000"
+            />
+
+            <Field
+              label="تاريخ الدفع"
+              type="date"
+              value={paymentForm.date}
+              onChange={(value) =>
+                setPaymentForm((f) => ({
+                  ...f,
+                  date: value,
+                }))
+              }
+            />
+
+            <SelectField
+              label="طريقة الدفع"
+              value={paymentForm.method}
+              onChange={(value) =>
+                setPaymentForm((f) => ({
+                  ...f,
+                  method: value,
+                }))
+              }
+              options={[
+                ["نقدي", "نقدي"],
+                ["بطاقة", "بطاقة"],
+                ["تحويل", "تحويل"],
+              ]}
+            />
+
+            <div className="field full">
+              <label>ملاحظات</label>
+
+              <textarea
+                value={paymentForm.notes}
+                onChange={(e) =>
+                  setPaymentForm((f) => ({
+                    ...f,
+                    notes: e.target.value,
+                  }))
+                }
+                rows="3"
+                placeholder="ملاحظات الدفعة"
+              />
+            </div>
+          </div>
+
+          <div className="modal-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => setModal(null)}
+            >
+              إلغاء
+            </button>
+
+            <button
+              className="btn btn-success"
+              onClick={savePayment}
+            >
+              تسجيل الدفعة
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {modal === "settings" && (
+        <Modal
+          title="إعدادات العيادة"
+          subtitle="معلومات تظهر داخل النظام."
+          onClose={() => setModal(null)}
+        >
+          <div className="form-grid">
+            <Field
+              label="اسم العيادة"
+              value={settings.clinicName}
+              onChange={(value) =>
+                setSettings((s) => ({
+                  ...s,
+                  clinicName: value,
+                }))
+              }
+            />
+
+            <Field
+              label="اسم الطبيب"
+              value={settings.doctorName}
+              onChange={(value) =>
+                setSettings((s) => ({
+                  ...s,
+                  doctorName: value,
+                }))
+              }
+            />
+
+            <Field
+              label="رقم الهاتف"
+              value={settings.phone}
+              onChange={(value) =>
+                setSettings((s) => ({
+                  ...s,
+                  phone: value,
+                }))
+              }
+            />
+
+            <Field
+              label="العنوان"
+              value={settings.address}
+              onChange={(value) =>
+                setSettings((s) => ({
+                  ...s,
+                  address: value,
+                }))
+              }
+            />
+          </div>
+
+          <div className="modal-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => setModal(null)}
+            >
+              إلغاء
+            </button>
+
+            <button
+              className="btn btn-primary"
+              onClick={saveSettings}
+            >
+              حفظ الإعدادات
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {toast && (
+        <div className="toast">
+          <span className="toast-icon">✓</span>
+          <span>{toast}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================
+   DASHBOARD
+========================= */
+
+function Dashboard({
+  settings,
+  patients,
+  todayAppointments,
+  upcomingAppointments,
+  previousAppointments,
+  totalRevenue,
+  todayRevenue,
+  patientName,
+  onPatient,
+  onAppointment,
+  onNewAppointment,
+  onNewPatient,
+  onPayment,
+}) {
+  return (
+    <>
+      <div className="welcome-card">
+        <div>
+          <div className="welcome-label">مرحبًا بك</div>
+
+          <h2>{settings.doctorName}</h2>
+
+          <p>
+            هذه لوحة التحكم الخاصة بـ{" "}
+            <strong>{settings.clinicName}</strong>.
+          </p>
+        </div>
+
+        <div className="welcome-date">
+          <span>اليوم</span>
+          <strong>{dateText(today())}</strong>
+        </div>
+      </div>
+
+      <div className="stats-grid">
+        <StatCard
+          icon="👥"
+          title="إجمالي المرضى"
+          value={patients.length}
+          description="مريض مسجل"
+          tone="blue"
+        />
+
+        <StatCard
+          icon="📅"
+          title="مواعيد اليوم"
+          value={todayAppointments.length}
+          description="موعد اليوم"
+          tone="green"
+        />
+
+        <StatCard
+          icon="🔔"
+          title="المواعيد القادمة"
+          value={upcomingAppointments.length}
+          description="موعد قادم"
+          tone="orange"
+        />
+
+        <StatCard
+          icon="💰"
+          title="إيرادات اليوم"
+          value={money(todayRevenue)}
+          description={`الإجمالي ${money(totalRevenue)}`}
+          tone="purple"
+        />
+      </div>
+
+      <div className="quick-actions">
+        <button
+          className="quick-action primary"
+          onClick={onNewPatient}
+        >
+          <span className="quick-icon">👤＋</span>
+
+          <div>
+            <strong>إضافة مريض وحجز موعد</strong>
+            <small>تسجيل المريض والموعد معًا</small>
+          </div>
+        </button>
+
+        <button
+          className="quick-action"
+          onClick={onNewAppointment}
+        >
+          <span className="quick-icon">📅</span>
+
+          <div>
+            <strong>حجز موعد</strong>
+            <small>حجز موعد لمريض موجود</small>
+          </div>
+        </button>
+
+        <button
+          className="quick-action"
+          onClick={onPayment}
+        >
+          <span className="quick-icon">💵</span>
+
+          <div>
+            <strong>تسجيل دفعة</strong>
+            <small>إضافة مبلغ مدفوع</small>
+          </div>
+        </button>
+      </div>
+
+      <div className="dashboard-grid">
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3>📅 مواعيد اليوم</h3>
+              <p>المواعيد المحددة لهذا اليوم</p>
+            </div>
+
+            <span className="count-badge">
+              {todayAppointments.length}
+            </span>
+          </div>
+
+          {todayAppointments.length === 0 ? (
+            <Empty
+              title="لا توجد مواعيد اليوم"
+              text="عند إضافة موعد بتاريخ اليوم سيظهر هنا تلقائيًا."
+            />
+          ) : (
+            <div className="appointment-list">
+              {todayAppointments.map((appointment) => (
+                <AppointmentCard
+                  key={appointment.id}
+                  appointment={appointment}
+                  patientName={patientName}
+                  onOpenPatient={() => {
+                    const patient = patients.find(
+                      (p) => p.id === appointment.patientId
+                    );
+
+                    if (patient) onPatient(patient);
+                  }}
+                  onEdit={() => onAppointment(appointment)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3>🔔 المواعيد القادمة</h3>
+              <p>ما ينتظر الدكتور في الأيام القادمة</p>
+            </div>
+
+            <span className="count-badge orange">
+              {upcomingAppointments.length}
+            </span>
+          </div>
+
+          {upcomingAppointments.length === 0 ? (
+            <Empty
+              title="لا توجد مواعيد قادمة"
+              text="أي موعد مستقبلي سيظهر هنا تلقائيًا."
+              actionText="حجز موعد"
+              onAction={onNewAppointment}
+            />
+          ) : (
+            <div className="upcoming-list">
+              {upcomingAppointments.slice(0, 8).map((appointment) => (
+                <UpcomingAppointment
+                  key={appointment.id}
+                  appointment={appointment}
+                  patientName={patientName}
+                  onEdit={() => onAppointment(appointment)}
+                />
+              ))}
+
+              {upcomingAppointments.length > 8 && (
+                <div className="more-note">
+                  يوجد {upcomingAppointments.length - 8} مواعيد أخرى
+                  قادمة.
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <section className="card recent-card">
+        <div className="card-header">
+          <div>
+            <h3>🕘 آخر المواعيد</h3>
+            <p>المواعيد السابقة المسجلة في النظام</p>
+          </div>
+        </div>
+
+        {previousAppointments.length === 0 ? (
+          <Empty
+            title="لا توجد مواعيد سابقة"
+            text="المواعيد المكتملة ستظهر هنا بعد تسجيلها."
+          />
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>المريض</th>
+                  <th>التاريخ</th>
+                  <th>الوقت</th>
+                  <th>العلاج</th>
+                  <th>الحالة</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {previousAppointments
+                  .slice(0, 8)
+                  .map((appointment) => (
+                    <tr key={appointment.id}>
+                      <td>
+                        <strong>
+                          {patientName(appointment.patientId)}
+                        </strong>
+                      </td>
+
+                      <td>{shortDate(appointment.date)}</td>
+
+                      <td>{appointment.time || "-"}</td>
+
+                      <td>
+                        {appointment.treatment || "غير محدد"}
+                      </td>
+
+                      <td>
+                        <StatusBadge
+                          status={appointment.status}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
+  );
+}
+
+/* =========================
+   PATIENTS
+========================= */
+
+function PatientsPage({
+  patients,
+  search,
+  setSearch,
+  appointments,
+  onNew,
+  onEdit,
+  onDelete,
+  onOpen,
+}) {
+  return (
+    <>
+      <div className="page-toolbar">
+        <div className="search-box">
+          <span>⌕</span>
+
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ابحث باسم المريض أو رقم الهاتف..."
+          />
+        </div>
+
+        <button className="btn btn-primary" onClick={onNew}>
+          ＋ إضافة مريض وحجز موعد
+        </button>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <h3>قائمة المرضى</h3>
+            <p>جميع المرضى المسجلين في العيادة</p>
+          </div>
+
+          <span className="count-badge">
+            {patients.length}
+          </span>
+        </div>
+
+        {patients.length === 0 ? (
+          <Empty
+            title="لا يوجد مرضى"
+            text="ابدأ بإضافة أول مريض إلى العيادة."
+            actionText="إضافة مريض"
+            onAction={onNew}
+          />
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>المريض</th>
+                  <th>الهاتف</th>
+                  <th>العمر</th>
+                  <th>الجنس</th>
+                  <th>المواعيد</th>
+                  <th className="actions-head">الإجراءات</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {patients.map((patient) => {
+                  const count = appointments.filter(
+                    (a) => a.patientId === patient.id
+                  ).length;
+
+                  return (
+                    <tr key={patient.id}>
+                      <td>
+                        <div className="patient-cell">
+                          <div className="patient-avatar">
+                            {patient.name?.charAt(0) || "م"}
+                          </div>
+
+                          <div>
+                            <strong>{patient.name}</strong>
+
+                            {patient.address && (
+                              <small>{patient.address}</small>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      <td>{patient.phone || "-"}</td>
+
+                      <td>
+                        {patient.age
+                          ? `${patient.age} سنة`
+                          : "-"}
+                      </td>
+
+                      <td>{patient.gender || "-"}</td>
+
+                      <td>
+                        <span className="number-badge">
+                          {count}
+                        </span>
+                      </td>
+
+                      <td>
+                        <div className="patient-actions">
+                          <button
+                            className="action-btn action-view"
+                            onClick={() => onOpen(patient)}
+                          >
+                            ملف المريض
+                          </button>
+
+                          <button
+                            className="action-btn action-edit"
+                            onClick={() => onEdit(patient)}
+                          >
+                            تعديل
+                          </button>
+
+                          <button
+                            className="action-btn action-delete"
+                            onClick={() => onDelete(patient.id)}
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* =========================
+   APPOINTMENTS
+========================= */
+
+function AppointmentsPage({
+  appointments,
+  patients,
+  search,
+  setSearch,
+  dateFilter,
+  setDateFilter,
+  onNew,
+  onEdit,
+  onDelete,
+  onPatient,
+}) {
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return appointments
+      .filter((appointment) => {
+        if (dateFilter === "today") {
+          return appointment.date === today();
+        }
+
+        if (dateFilter === "upcoming") {
+          return appointment.date > today();
+        }
+
+        if (dateFilter === "previous") {
+          return appointment.date < today();
+        }
+
+        return true;
+      })
+      .filter((appointment) => {
+        if (!q) return true;
+
+        const patient = patients.find(
+          (p) => p.id === appointment.patientId
+        );
+
+        return (
+          patient?.name?.toLowerCase().includes(q) ||
+          patient?.phone?.toLowerCase().includes(q) ||
+          appointment.treatment
+            ?.toLowerCase()
+            .includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const first = `${a.date} ${a.time || ""}`;
+        const second = `${b.date} ${b.time || ""}`;
+
+        return first.localeCompare(second);
+      });
+  }, [
+    appointments,
+    patients,
+    search,
+    dateFilter,
+  ]);
+
+  const getPatient = (id) =>
+    patients.find((patient) => patient.id === id);
+
+  return (
+    <>
+      <div className="page-toolbar appointment-toolbar">
+        <div className="search-box">
+          <span>⌕</span>
+
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ابحث عن مريض أو علاج..."
+          />
+        </div>
+
+        <div className="filter-buttons">
+          <button
+            className={
+              dateFilter === "all"
+                ? "filter-btn active"
+                : "filter-btn"
+            }
+            onClick={() => setDateFilter("all")}
+          >
+            الكل
+          </button>
+
+          <button
+            className={
+              dateFilter === "today"
+                ? "filter-btn active"
+                : "filter-btn"
+            }
+            onClick={() => setDateFilter("today")}
+          >
+            اليوم
+          </button>
+
+          <button
+            className={
+              dateFilter === "upcoming"
+                ? "filter-btn active"
+                : "filter-btn"
+            }
+            onClick={() => setDateFilter("upcoming")}
+          >
+            القادمة
+          </button>
+
+          <button
+            className={
+              dateFilter === "previous"
+                ? "filter-btn active"
+                : "filter-btn"
+            }
+            onClick={() => setDateFilter("previous")}
+          >
+            السابقة
+          </button>
+        </div>
+
+        <button
+          className="btn btn-primary"
+          onClick={() => onNew()}
+        >
+          ＋ حجز موعد
+        </button>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <h3>المواعيد</h3>
+            <p>
+              يتم تحديث مواعيد اليوم والمواعيد القادمة تلقائيًا
+              حسب التاريخ.
+            </p>
+          </div>
+
+          <span className="count-badge">
+            {filtered.length}
+          </span>
+        </div>
+
+        {filtered.length === 0 ? (
+          <Empty
+            title="لا توجد مواعيد"
+            text="لا توجد مواعيد تطابق البحث أو الفلتر المحدد."
+            actionText="حجز موعد"
+            onAction={() => onNew()}
+          />
+        ) : (
+          <div className="appointments-full-list">
+            {filtered.map((appointment) => {
+              const patient = getPatient(
+                appointment.patientId
+              );
+
+              return (
+                <div
+                  className="appointment-full-card"
+                  key={appointment.id}
+                >
+                  <div className="appointment-date-box">
+                    <strong>
+                      {appointment.time || "--:--"}
+                    </strong>
+
+                    <span>
+                      {shortDate(appointment.date)}
+                    </span>
+                  </div>
+
+                  <div className="appointment-main">
+                    <button
+                      className="patient-link"
+                      onClick={() => {
+                        if (patient) onPatient(patient);
+                      }}
+                    >
+                      {patient?.name || "مريض غير معروف"}
+                    </button>
+
+                    <div className="appointment-details">
+                      <span>
+                        📅 {dateText(appointment.date)}
+                      </span>
+
+                      <span>
+                        🦷{" "}
+                        {appointment.treatment ||
+                          "العلاج غير محدد"}
+                      </span>
+
+                      {patient?.phone && (
+                        <span>📞 {patient.phone}</span>
+                      )}
+                    </div>
+
+                    {appointment.notes && (
+                      <p className="appointment-note">
+                        {appointment.notes}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="appointment-side">
+                    <StatusBadge
+                      status={appointment.status}
+                    />
+
+                    <div className="row-actions">
+                      <button
+                        className="action-btn action-edit"
+                        onClick={() =>
+                          onEdit(appointment)
+                        }
+                      >
+                        تعديل
+                      </button>
+
+                      <button
+                        className="action-btn action-delete"
+                        onClick={() =>
+                          onDelete(appointment.id)
+                        }
+                      >
+                        حذف
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* =========================
+   ACCOUNTS
+========================= */
+
+function AccountsPage({
+  payments,
+  patients,
+  totalRevenue,
+  todayRevenue,
+  onNew,
+  onDelete,
+  patientName,
+}) {
+  return (
+    <>
+      <div className="stats-grid two">
+        <StatCard
+          icon="💰"
+          title="إجمالي الإيرادات"
+          value={money(totalRevenue)}
+          description="جميع الدفعات"
+          tone="purple"
+        />
+
+        <StatCard
+          icon="💵"
+          title="إيرادات اليوم"
+          value={money(todayRevenue)}
+          description="دفعات اليوم"
+          tone="green"
+        />
+      </div>
+
+      <div className="page-toolbar">
+        <div>
+          <h3 className="toolbar-title">
+            سجل المدفوعات
+          </h3>
+
+          <p className="toolbar-description">
+            جميع الدفعات المسجلة في العيادة.
+          </p>
+        </div>
+
+        <button
+          className="btn btn-success"
+          onClick={() => onNew()}
+        >
+          ＋ تسجيل دفعة
+        </button>
+      </div>
+
+      <div className="card">
+        {payments.length === 0 ? (
+          <Empty
+            title="لا توجد دفعات"
+            text="عند تسجيل دفعة ستظهر هنا."
+            actionText="تسجيل دفعة"
+            onAction={() => onNew()}
+          />
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>المريض</th>
+                  <th>المبلغ</th>
+                  <th>التاريخ</th>
+                  <th>طريقة الدفع</th>
+                  <th>ملاحظات</th>
+                  <th>الإجراء</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {[...payments]
+                  .sort((a, b) =>
+                    b.date.localeCompare(a.date)
+                  )
+                  .map((payment) => (
+                    <tr key={payment.id}>
+                      <td>
+                        <strong>
+                          {patientName(payment.patientId)}
+                        </strong>
+                      </td>
+
+                      <td>
+                        <strong className="money">
+                          {money(payment.amount)}
+                        </strong>
+                      </td>
+
+                      <td>{shortDate(payment.date)}</td>
+
+                      <td>{payment.method}</td>
+
+                      <td>{payment.notes || "-"}</td>
+
+                      <td>
+                        <button
+                          className="action-btn action-delete"
+                          onClick={() =>
+                            onDelete(payment.id)
+                          }
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* =========================
+   REPORTS
+========================= */
+
+function ReportsPage({
+  patients,
+  appointments,
+  payments,
+  totalRevenue,
+  todayRevenue,
+  patientName,
+}) {
+  const completed = appointments.filter(
+    (a) => a.status === "مكتمل"
+  ).length;
+
+  const cancelled = appointments.filter(
+    (a) => a.status === "ملغي"
+  ).length;
+
+  const confirmed = appointments.filter(
+    (a) => a.status === "مؤكد"
+  ).length;
+
+  return (
+    <>
+      <div className="reports-grid">
+        <ReportBox
+          title="المرضى"
+          value={patients.length}
+          description="إجمالي المرضى"
+          icon="👥"
+        />
+
+        <ReportBox
+          title="المواعيد"
+          value={appointments.length}
+          description="إجمالي المواعيد"
+          icon="📅"
+        />
+
+        <ReportBox
+          title="المكتملة"
+          value={completed}
+          description="مواعيد مكتملة"
+          icon="✓"
+        />
+
+        <ReportBox
+          title="الإيرادات"
+          value={money(totalRevenue)}
+          description="إجمالي المدفوعات"
+          icon="💰"
+        />
+      </div>
+
+      <div className="dashboard-grid">
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3>ملخص المواعيد</h3>
+              <p>حالة المواعيد المسجلة</p>
+            </div>
+          </div>
+
+          <div className="report-list">
+            <ReportLine
+              label="مؤكد"
+              value={confirmed}
+            />
+
+            <ReportLine
+              label="مكتمل"
+              value={completed}
+            />
+
+            <ReportLine
+label="ملغي"
+              value={cancelled}
+            />
+
+            <ReportLine
+              label="إيرادات اليوم"
+              value={money(todayRevenue)}
+            />
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3>آخر المدفوعات</h3>
+              <p>آخر العمليات المالية</p>
+            </div>
+          </div>
+
+          {payments.length === 0 ? (
+            <Empty
+              title="لا توجد بيانات"
+              text="ستظهر المدفوعات هنا بعد تسجيلها."
+            />
+          ) : (
+            <div className="mini-payment-list">
+              {[...payments]
+                .sort((a, b) =>
+                  b.date.localeCompare(a.date)
+                )
+                .slice(0, 6)
+                .map((payment) => (
+                  <div
+                    className="mini-payment"
+                    key={payment.id}
+                  >
+                    <div>
+                      <strong>
+                        {patientName(payment.patientId)}
+                      </strong>
+
+                      <span>
+                        {shortDate(payment.date)}
+                      </span>
+                    </div>
+
+                    <strong className="money">
+                      {money(payment.amount)}
+                    </strong>
+                  </div>
+                ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </>
+  );
+}
+
+/* =========================
+   PATIENT PROFILE
+========================= */
+
+function PatientProfile({
+  patient,
+  appointments,
+  payments,
+  onBack,
+  onEdit,
+  onAppointment,
+  onPayment,
+  onEditAppointment,
+  onDeleteAppointment,
+  onDeletePatient,
+}) {
+  const totalPaid = payments.reduce(
+    (sum, payment) => sum + Number(payment.amount || 0),
+    0
+  );
+
+  return (
+    <>
+      <div className="profile-top-actions">
+        <button
+          className="btn btn-secondary"
+          onClick={onBack}
+        >
+          ← العودة إلى المرضى
+        </button>
+
+        <div className="profile-actions">
+          <button
+            className="btn btn-primary"
+            onClick={onAppointment}
+          >
+            ＋ حجز موعد
+          </button>
+
+          <button
+            className="btn btn-success"
+            onClick={onPayment}
+          >
+            ＋ تسجيل دفعة
+          </button>
+
+          <button
+            className="btn btn-outline"
+            onClick={onEdit}
+          >
+            تعديل المريض
+          </button>
+        </div>
+      </div>
+
+      <div className="profile-header card">
+        <div className="profile-person">
+          <div className="profile-avatar">
+            {patient.name?.charAt(0) || "م"}
+          </div>
+
+          <div>
+            <h2>{patient.name}</h2>
+
+            <p>
+              {patient.phone || "لا يوجد رقم هاتف"}
+            </p>
+          </div>
+        </div>
+
+        <div className="profile-info-grid">
+          <InfoItem
+            label="العمر"
+            value={
+              patient.age
+                ? `${patient.age} سنة`
+                : "غير محدد"
+            }
+          />
+
+          <InfoItem
+            label="الجنس"
+            value={patient.gender || "غير محدد"}
+          />
+
+          <InfoItem
+            label="العنوان"
+            value={patient.address || "غير محدد"}
+          />
+
+          <InfoItem
+            label="عدد المواعيد"
+            value={appointments.length}
+          />
+        </div>
+      </div>
+
+      <div className="stats-grid two">
+        <StatCard
+          icon="📅"
+          title="المواعيد"
+          value={appointments.length}
+          description="إجمالي مواعيد المريض"
+          tone="blue"
+        />
+
+        <StatCard
+          icon="💰"
+          title="المدفوع"
+          value={money(totalPaid)}
+          description="إجمالي المدفوعات"
+          tone="green"
+        />
+      </div>
+
+      <div className="dashboard-grid">
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3>📅 مواعيد المريض</h3>
+              <p>السجل الكامل للمواعيد</p>
+            </div>
+
+            <span className="count-badge">
+              {appointments.length}
+            </span>
+          </div>
+
+          {appointments.length === 0 ? (
+            <Empty
+              title="لا توجد مواعيد"
+              text="لم يتم حجز أي موعد لهذا المريض."
+              actionText="حجز موعد"
+              onAction={onAppointment}
+            />
+          ) : (
+            <div className="profile-appointment-list">
+              {appointments.map((appointment) => (
+                <div
+                  className="profile-appointment"
+                  key={appointment.id}
+                >
+                  <div>
+                    <strong>
+                      {dateText(appointment.date)}
+                    </strong>
+
+                    <span>
+                      الساعة {appointment.time || "--:--"}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span>
+                      {appointment.treatment ||
+                        "العلاج غير محدد"}
+                    </span>
+                  </div>
+
+                  <StatusBadge
+                    status={appointment.status}
+                  />
+
+                  <div className="row-actions">
+                    <button
+                      className="action-btn action-edit"
+                      onClick={() =>
+                        onEditAppointment(appointment)
+                      }
+                    >
+                      تعديل
+                    </button>
+
+                    <button
+                      className="action-btn action-delete"
+                      onClick={() =>
+                        onDeleteAppointment(appointment.id)
+                      }
+                    >
+                      حذف
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3>💰 المدفوعات</h3>
+              <p>سجل دفعات هذا المريض</p>
+            </div>
+          </div>
+
+          {payments.length === 0 ? (
+            <Empty
+              title="لا توجد دفعات"
+              text="لم يتم تسجيل أي دفعة لهذا المريض."
+              actionText="تسجيل دفعة"
+              onAction={onPayment}
+            />
+          ) : (
+            <div className="payment-list">
+              {payments.map((payment) => (
+                <div
+                  className="payment-item"
+                  key={payment.id}
+                >
+                  <div>
+                    <strong>
+                      {money(payment.amount)}
+                    </strong>
+
+                    <span>
+                      {shortDate(payment.date)} •{" "}
+                      {payment.method}
+                    </span>
+                  </div>
+
+                  {payment.notes && (
+                    <small>{payment.notes}</small>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+
+      {patient.notes && (
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3>📝 ملاحظات المريض</h3>
+            </div>
+          </div>
+
+          <div className="patient-notes">
+            {patient.notes}
+          </div>
+        </section>
+      )}
+
+      <div className="danger-zone">
+        <div>
+          <strong>حذف المريض</strong>
+
+          <p>
+            حذف المريض سيحذف أيضًا مواعيده ومدفوعاته من
+            النظام.
+          </p>
+        </div>
+
+        <button
+          className="btn btn-danger"
+          onClick={onDeletePatient}
+        >
+          حذف المريض نهائيًا
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* =========================
+   SMALL COMPONENTS
+========================= */
+
+function NavItem({
+  active,
+  onClick,
+  icon,
+  text,
+}) {
+  return (
+    <button
+      className={
+        active ? "nav-item active" : "nav-item"
+      }
+      onClick={onClick}
+    >
+      <span className="nav-icon">{icon}</span>
+      <span>{text}</span>
+    </button>
+  );
+}
+
+function StatCard({
+  icon,
+  title,
+  value,
+  description,
+  tone,
+}) {
+  return (
+    <div className={`stat-card ${tone || ""}`}>
+      <div className="stat-icon">{icon}</div>
+
+      <div className="stat-content">
+        <span>{title}</span>
+
+        <strong>{value}</strong>
+
+        <small>{description}</small>
+      </div>
+    </div>
+  );
+}
+
+function AppointmentCard({
+  appointment,
+  patientName,
+  onOpenPatient,
+  onEdit,
+}) {
+  return (
+    <div className="appointment-card">
+      <div className="appointment-time">
+        <strong>{appointment.time || "--:--"}</strong>
+      </div>
+
+      <div className="appointment-info">
+        <button
+          className="patient-link"
+          onClick={onOpenPatient}
+        >
+          {patientName(appointment.patientId)}
+        </button>
+
+        <span>
+          {appointment.treatment ||
+            "العلاج غير محدد"}
+        </span>
+      </div>
+
+      <StatusBadge status={appointment.status} />
+
+      <button
+        className="small-edit"
+        onClick={onEdit}
+      >
+        تعديل
+      </button>
+    </div>
+  );
+}
+
+function UpcomingAppointment({
+  appointment,
+  patientName,
+  onEdit,
+}) {
+  const date = new Date(
+    `${appointment.date}T00:00:00`
+  );
+
+  const diffDays = Math.ceil(
+    (date.getTime() -
+      new Date(`${today()}T00:00:00`).getTime()) /
+      (1000 * 60 * 60 * 24)
+  );
+
+  let dayText = "";
+
+  if (diffDays === 1) {
+    dayText = "غدًا";
+  } else if (diffDays > 1) {
+    dayText = `بعد ${diffDays} أيام`;
+  }
+
+  return (
+    <div className="upcoming-item">
+      <div className="upcoming-date">
+        <strong>
+          {date.toLocaleDateString("ar-IQ", {
+            day: "2-digit",
+            month: "2-digit",
+          })}
+        </strong>
+
+        <span>{dayText}</span>
+      </div>
+
+      <div className="upcoming-info">
+        <strong>
+          {patientName(appointment.patientId)}
+        </strong>
+
+        <span>
+          {appointment.time || "--:--"} •{" "}
+          {appointment.treatment ||
+            "العلاج غير محدد"}
+        </span>
+      </div>
+
+      <StatusBadge status={appointment.status} />
+
+      <button
+        className="small-edit"
+        onClick={onEdit}
+      >
+        تعديل
+      </button>
+    </div>
+  );
+}
+
+function StatusBadge({ status }) {
+  const className =
+    status === "مؤكد"
+      ? "confirmed"
+      : status === "مكتمل"
+      ? "completed"
+      : status === "ملغي"
+      ? "cancelled"
+      : "pending";
+
+  return (
+    <span className={`status ${className}`}>
+      {status || "بانتظار التأكيد"}
+    </span>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder = "",
+}) {
+  return (
+    <div className="field">
+      <label>{label}</label>
+
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+    </div>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}) {
+  return (
+    <div className="field">
+      <label>{label}</label>
+
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map(([optionValue, optionLabel]) => (
+          <option
+            value={optionValue}
+            key={`${optionValue}-${optionLabel}`}
+          >
+            {optionLabel}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  subtitle,
+  children,
+  onClose,
+  size = "medium",
+}) {
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className={`modal ${size}`}>
+        <div className="modal-header">
+          <div>
+            <h2>{title}</h2>
+
+            {subtitle && <p>{subtitle}</p>}
+          </div>
+
+          <button
+            className="modal-close"
+            onClick={onClose}
+            aria-label="إغلاق"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Empty({
+  title,
+  text,
+  actionText,
+  onAction,
+}) {
+  return (
+    <div className="empty">
+      <div className="empty-icon">📋</div>
+
+      <h4>{title}</h4>
+
+      <p>{text}</p>
+
+      {actionText && onAction && (
+        <button
+          className="btn btn-primary"
+          onClick={onAction}
+        >
+          {actionText}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function InfoItem({ label, value }) {
+  return (
+    <div className="info-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ReportBox({
+  title,
+  value,
+  description,
+  icon,
+}) {
+  return (
+    <div className="report-box">
+      <div className="report-box-icon">{icon}</div>
+
+      <div>
+        <span>{title}</span>
+        <strong>{value}</strong>
+        <small>{description}</small>
+      </div>
+    </div>
+  );
+}
+
+function ReportLine({ label, value }) {
+  return (
+    <div className="report-line">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+/* =========================
+   CSS
+========================= */
+
+const CSS = `
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family:
+    "Segoe UI",
+    Tahoma,
+    Arial,
+    sans-serif;
+
+  color: #0f172a;
+  background: #f1f5f9;
+  font-synthesis: none;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #f1f5f9;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  background: #f1f5f9;
+}
+
+/* SIDEBAR */
+
+.sidebar {
+  width: 270px;
+  min-height: 100vh;
+  background: #0f172a;
+  color: #ffffff;
+  padding: 22px 16px;
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 26px;
+  border-bottom: 1px solid #263449;
+}
+
+.brand-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2563eb;
+  font-size: 25px;
+  flex-shrink: 0;
+}
+
+.brand-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.brand-subtitle {
+  font-size: 12px;
+  color: #cbd5e1;
+  margin-top: 4px;
+}
+
+.sidebar-section-title {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 700;
+  margin: 25px 10px 10px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nav-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  border-radius: 11px;
+  padding: 13px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: right;
+  font-size: 15px;
+  font-weight: 700;
+  transition: 0.2s;
+}
+
+.nav-item:hover {
+  background: #1e293b;
+  color: #ffffff;
+}
+
+.nav-item.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 5px 18px rgba(37, 99, 235, 0.25);
+}
+
+.nav-icon {
+  width: 24px;
+  text-align: center;
+  font-size: 18px;
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+}
+
+.settings-button {
+  width: 100%;
+  border: 1px solid #334155;
+  background: #172033;
+  color: #ffffff;
+  border-radius: 11px;
+  padding: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-weight: 700;
+  margin-bottom: 15px;
+}
+
+.settings-button:hover {
+  background: #1e293b;
+}
+
+.doctor-box {
+  border-top: 1px solid #263449;
+  padding: 17px 6px 0;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.doctor-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+
+.doctor-box div:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.doctor-box strong {
+  font-size: 13px;
+  color: #ffffff;
+}
+
+.doctor-box span {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* MAIN */
+
+.main {
+  width: calc(100% - 270px);
+  margin-right: 270px;
+  min-height: 100vh;
+}
+
+.topbar {
+  background: #ffffff;
+  min-height: 88px;
+  border-bottom: 1px solid #dbe3ed;
+  padding: 18px 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.breadcrumb {
+  color: #64748b;
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 24px;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.page-content {
+  padding: 28px;
+  max-width: 1600px;
+  margin: auto;
+}
+
+/* BUTTONS */
+
+.btn {
+  border: 0;
+  border-radius: 9px;
+  min-height: 42px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  transition: 0.2s;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.btn-success {
+  background: #16a34a;
+  color: #ffffff;
+}
+
+.btn-success:hover {
+  background: #15803d;
+}
+
+.btn-danger {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  background: #b91c1c;
+}
+
+.btn-secondary {
+  background: #334155;
+  color: #ffffff;
+}
+
+.btn-secondary:hover {
+  background: #1e293b;
+}
+
+.btn-outline {
+  background: #ffffff;
+  color: #1e40af;
+  border: 1px solid #2563eb;
+}
+
+.btn-outline:hover {
+  background: #eff6ff;
+}
+
+/* WELCOME */
+
+.welcome-card {
+  background: linear-gradient(135deg, #0f172a, #1e3a8a);
+  color: #ffffff;
+  border-radius: 18px;
+  padding: 25px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 22px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
+}
+
+.welcome-label {
+  color: #bfdbfe;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.welcome-card h2 {
+  margin: 5px 0 5px;
+  font-size: 26px;
+}
+
+.welcome-card p {
+  margin: 0;
+  color: #dbeafe;
+}
+
+.welcome-date {
+  text-align: left;
+  background: rgba(255,255,255,0.1);
+  padding: 12px 16px;
+  border-radius: 12px;
+  min-width: 170px;
+}
+
+.welcome-date span {
+  display: block;
+  color: #bfdbfe;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.welcome-date strong {
+  font-size: 14px;
+}
+
+/* STATS */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.stats-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stat-card {
+  background: #ffffff;
+  border: 1px solid #dbe3ed;
+  border-radius: 14px;
+  padding: 18px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.stat-icon {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eff6ff;
+  font-size: 21px;
+}
+
+.stat-card.green .stat-icon {
+  background: #ecfdf5;
+}
+
+.stat-card.orange .stat-icon {
+  background: #fff7ed;
+}
+
+.stat-card.purple .stat-icon {
+  background: #f5f3ff;
+}
+
+.stat-content {
+  min-width: 0;
+}
+
+.stat-content > span {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.stat-content strong {
+  display: block;
+  margin: 5px 0;
+  font-size: 22px;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.stat-content small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+/* QUICK ACTIONS */
+
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.quick-action {
+  border: 1px solid #dbe3ed;
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 13px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  text-align: right;
+  transition: 0.2s;
+}
+
+.quick-action:hover {
+  border-color: #2563eb;
+  box-shadow: 0 5px 18px rgba(15, 23, 42, 0.08);
+}
+
+.quick-action.primary {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.quick-icon {
+  width: 43px;
+  height: 43px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #bfdbfe;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 19px;
+}
+
+.quick-action div:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-action strong {
+  font-size: 14px;
+}
+
+.quick-action small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+/* CARDS */
+
+.card {
+  background: #ffffff;
+  border: 1px solid #dbe3ed;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 18px 20px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+}
+
+.card-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.card-header p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.count-badge,
+.number-badge {
+  min-width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.count-badge.orange {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.recent-card {
+  margin-bottom: 22px;
+}
+
+/* APPOINTMENTS */
+
+.appointment-list {
+  padding: 10px 14px 14px;
+}
+
+.appointment-card {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 6px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.appointment-card:last-child {
+  border-bottom: 0;
+}
+
+.appointment-time {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 9px;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.appointment-time strong {
+  font-size: 14px;
+}
+
+.appointment-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.patient-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #1d4ed8;
+  font-weight: 800;
+  text-align: right;
+  font-size: 14px;
+}
+
+.patient-link:hover {
+  color: #1e40af;
+  text-decoration: underline;
+}
+
+.appointment-info > span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.status.confirmed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status.completed {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status.cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status.pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.small-edit {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.small-edit:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+/* UPCOMING */
+
+.upcoming-list {
+  padding: 8px 14px 14px;
+}
+
+.upcoming-item {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 5px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.upcoming-item:last-child {
+  border-bottom: 0;
+}
+
+.upcoming-date {
+  background: #fff7ed;
+  border-radius: 9px;
+  padding: 8px 5px;
+  text-align: center;
+}
+
+.upcoming-date strong {
+  display: block;
+  color: #c2410c;
+  font-size: 13px;
+}
+
+.upcoming-date span {
+  display: block;
+  color: #9a3412;
+  font-size: 9px;
+  margin-top: 2px;
+}
+
+.upcoming-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.upcoming-info strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.upcoming-info span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.more-note {
+  color: #64748b;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+/* TOOLBAR */
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.page-toolbar > .search-box {
+  flex: 1;
+  min-width: 250px;
+}
+
+.search-box {
+  height: 44px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+}
+
+.search-box:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px #dbeafe;
+}
+
+.search-box span {
+  color: #64748b;
+  font-size: 20px;
+}
+
+.search-box input {
+  border: 0;
+  outline: 0;
+  width: 100%;
+  font-size: 13px;
+  color: #0f172a;
+  background: transparent;
+}
+
+.search-box input::placeholder {
+  color: #94a3b8;
+}
+
+.filter-buttons {
+  display: flex;
+  gap: 5px;
+  background: #e2e8f0;
+  padding: 4px;
+  border-radius: 9px;
+}
+
+.filter-btn {
+  border: 0;
+  background: transparent;
+  color: #475569;
+  border-radius: 7px;
+  padding: 8px 11px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.filter-btn.active {
+  background: #ffffff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+}
+
+.toolbar-title {
+  margin: 0;
+  color: #0f172a;
+}
+
+.toolbar-description {
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+/* TABLE */
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 850px;
+}
+
+th {
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 13px 16px;
+  text-align: right;
+  border-bottom: 1px solid #dbe3ed;
+  white-space: nowrap;
+}
+
+td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #eef2f7;
+  color: #334155;
+  font-size: 12px;
+}
+
+tbody tr:hover {
+  background: #f8fafc;
+}
+
+.actions-head {
+  text-align: center;
+}
+
+.patient-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.patient-avatar {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+}
+
+.patient-cell > div:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.patient-cell strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.patient-cell small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.patient-actions,
+.row-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 10px;
+  font-weight: 800;
+  background: #ffffff;
+}
+
+.action-view {
+  border: 1px solid #2563eb;
+  color: #1d4ed8;
+}
+
+.action-view:hover {
+  background: #eff6ff;
+}
+
+.action-edit {
+  border: 1px solid #64748b;
+  color: #334155;
+}
+
+.action-edit:hover {
+  background: #f1f5f9;
+}
+
+.action-delete {
+  border: 1px solid #dc2626;
+  color: #b91c1c;
+}
+
+.action-delete:hover {
+  background: #fef2f2;
+}
+
+.money {
+  color: #15803d;
+}
+
+/* APPOINTMENT FULL */
+
+.appointments-full-list {
+  padding: 12px;
+}
+
+.appointment-full-card {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 11px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+.appointment-full-card:last-child {
+  margin-bottom: 0;
+}
+
+.appointment-date-box {
+  background: #eff6ff;
+  border-radius: 9px;
+  padding: 10px;
+  text-align: center;
+}
+
+.appointment-date-box strong {
+  display: block;
+  color: #1d4ed8;
+  font-size: 16px;
+}
+
+.appointment-date-box span {
+  display: block;
+  color: #475569;
+  font-size: 10px;
+  margin-top: 3px;
+}
+
+.appointment-main {
+  min-width: 0;
+}
+
+.appointment-main .patient-link {
+  display: block;
+  margin-bottom: 7px;
+}
+
+.appointment-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.appointment-note {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  background: #f8fafc;
+  border-radius: 6px;
+  color: #475569;
+  font-size: 10px;
+}
+
+.appointment-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 9px;
+}
+
+/* PROFILE */
+
+.profile-top-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.profile-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.profile-header {
+  padding: 22px;
+  display: flex;
+  justify-content: space-between;
+  gap: 25px;
+  margin-bottom: 18px;
+}
+
+.profile-person {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.profile-avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 16px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 27px;
+  font-weight: 900;
+}
+
+.profile-person h2 {
+  margin: 0 0 5px;
+  color: #0f172a;
+}
+
+.profile-person p {
+  margin: 0;
+  color: #64748b;
+}
+
+.profile-info-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  gap: 12px;
+  flex: 1;
+  max-width: 650px;
+}
+
+.info-item {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  padding: 11px;
+}
+
+.info-item span {
+  display: block;
+  color: #64748b;
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+
+.info-item strong {
+  color: #0f172a;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.profile-appointment-list {
+  padding: 12px;
+}
+
+.profile-appointment {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.profile-appointment:last-child {
+  border-bottom: 0;
+}
+
+.profile-appointment > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profile-appointment strong {
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.profile-appointment span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.payment-list {
+  padding: 12px;
+}
+
+.payment-item {
+  padding: 13px 5px;
+  border-bottom: 1px solid #eef2f7;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.payment-item:last-child {
+  border-bottom: 0;
+}
+
+.payment-item > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.payment-item strong {
+  color: #15803d;
+}
+
+.payment-item span,
+.payment-item small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.patient-notes {
+  padding: 18px;
+  color: #334155;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.danger-zone {
+  margin-top: 22px;
+  padding: 18px;
+  background: #fff;
+  border: 1px solid #fecaca;
+  border-radius: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+}
+
+.danger-zone strong {
+  color: #991b1b;
+}
+
+.danger-zone p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 11px;
+}
+
+/* REPORTS */
+
+.reports-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.report-box {
+  background: #ffffff;
+  border: 1px solid #dbe3ed;
+  border-radius: 13px;
+  padding: 18px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.report-box-icon {
+  width: 43px;
+  height: 43px;
+  border-radius: 10px;
+  background: #eff6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.report-box > div:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.report-box span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.report-box strong {
+  color: #0f172a;
+  font-size: 19px;
+}
+
+.report-box small {
+  color: #94a3b8;
+  font-size: 9px;
+}
+
+.report-list {
+  padding: 10px 18px;
+}
+
+.report-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 13px 0;
+  border-bottom: 1px solid #eef2f7;
+  color: #475569;
+  font-size: 12px;
+}
+
+.report-line:last-child {
+  border-bottom: 0;
+}
+
+.report-line strong {
+  color: #0f172a;
+}
+
+.mini-payment-list {
+  padding: 8px 18px;
+}
+
+.mini-payment {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.mini-payment:last-child {
+  border-bottom: 0;
+}
+
+.mini-payment div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+
+
+/* MODAL */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.62);
+  z-index: 100;
+  padding: 25px;
+  overflow-y: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.modal {
+  width: min(650px, 100%);
+  margin: 20px auto;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 25px 70px rgba(15, 23, 42, 0.3);
+  overflow: hidden;
+}
+
+.modal.large {
+  width: min(850px, 100%);
+}
+
+.modal-header {
+  padding: 19px 22px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  align-items: flex-start;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 19px;
+}
+
+.modal-header p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.modal-close {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  background: #f1f5f9;
+}
+
+.modal-body {
+  padding: 22px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.field label {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 8px;
+  padding: 10px 11px;
+  outline: none;
+  font-size: 13px;
+}
+
+.field input {
+  height: 42px;
+}
+
+.field select {
+  height: 42px;
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.6;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px #dbeafe;
+}
+
+.field input::placeholder,
+.field textarea::placeholder {
+  color: #94a3b8;
+}
+
+.appointment-section {
+  margin-top: 22px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+  padding: 17px;
+}
+
+.appointment-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 16px;
+}
+
+.appointment-section-header h3 {
+  margin: 0;
+  color: #1e3a8a;
+  font-size: 15px;
+}
+
+.appointment-section-header p {
+  margin: 4px 0 0;
+  color: #475569;
+  font-size: 10px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1e3a8a;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.switch-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: #2563eb;
+}
+
+.appointment-fields {
+  margin-top: 3px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 22px;
+  padding-top: 17px;
+  border-top: 1px solid #e2e8f0;
+}
+
+/* TOAST */
+
+.toast {
+  position: fixed;
+  left: 25px;
+  bottom: 25px;
+  z-index: 200;
+  background: #0f172a;
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 12px 16px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toast-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #16a34a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* RESPONSIVE */
+
+@media (max-width: 1150px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reports-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .profile-header {
+    flex-direction: column;
+  }
+
+  .profile-info-grid {
+    max-width: none;
+  }
+}
+
+@media (max-width: 850px) {
+  .sidebar {
+    width: 78px;
+    padding: 15px 9px;
+  }
+
+  .brand {
+    justify-content: center;
+    padding: 5px 0 18px;
+  }
+
+  .brand > div:last-child,
+  .sidebar-section-title,
+  .nav-item span:last-child,
+  .settings-button span:last-child,
+  .doctor-box div:last-child {
+    display: none;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 13px 5px;
+  }
+
+  .settings-button {
+    justify-content: center;
+  }
+
+  .doctor-box {
+    justify-content: center;
+  }
+
+  .main {
+    width: calc(100% - 78px);
+    margin-right: 78px;
+  }
+
+  .topbar {
+    padding: 16px 20px;
+  }
+
+  .page-content {
+    padding: 20px;
+  }
+
+  .quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .appointment-full-card {
+    grid-template-columns: 85px minmax(0, 1fr);
+  }
+
+  .appointment-side {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 650px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .top-actions {
+    width: 100%;
+  }
+
+  .top-actions .btn {
+    width: 100%;
+  }
+
+  .stats-grid,
+  .stats-grid.two,
+  .reports-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .welcome-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .welcome-date {
+    width: 100%;
+    text-align: right;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .field.full {
+    grid-column: auto;
+  }
+
+  .appointment-section-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .modal {
+    margin: 8px auto;
+  }
+
+  .modal-body {
+    padding: 16px;
+  }
+
+  .profile-actions {
+    width: 100%;
+  }
+
+  .profile-actions .btn {
+    flex: 1;
+  }
+
+  .profile-info-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .danger-zone {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .sidebar {
+    width: 64px;
+  }
+
+  .main {
+    width: calc(100% - 64px);
+    margin-right: 64px;
+  }
+
+  .page-content {
+    padding: 14px;
+  }
+
+  .topbar {
+    padding: 14px;
+  }
+
+  .stats-grid {
+    gap: 10px;
+  }
+
+  .stat-card {
+    padding: 13px;
+  }
+
+  .appointment-card {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .appointment-card .status,
+  .appointment-card .small-edit {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .upcoming-item {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .upcoming-item .status,
+  .upcoming-item .small-edit {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .profile-actions {
+    flex-direction: column;
+  }
+
+  .profile-actions .btn {
+    width: 100%;
+  }
+}
+`;
+
+export default App;
